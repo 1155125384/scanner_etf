@@ -228,9 +228,9 @@ def show_progress(completed, current_symbol, state="requesting"):
     percentage = completed / total_symbols if total_symbols else 0
     message = (
         f"\r[{progress_bar}] {completed:>4}/{total_symbols} "
-        f"({percentage:.1%}) | {state:<18} | "
-        f"{current_symbol:<6} | Ratings {len(fund_rating_rows):>4} | "
-        f"Failed {len(fund_rating_errors):>3} | {eta}"
+        f"({percentage:.1%}) | "
+        f"{current_symbol:<6} | Success {len(fund_rating_rows):>4} | "
+        f"Failed {len(fund_rating_errors):>3}"
     )
     sys.stdout.write(message[:160].ljust(160))
     sys.stdout.flush()
