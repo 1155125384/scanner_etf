@@ -948,13 +948,13 @@ def analyze_ticker(ticker, cfg, bench_rets_by_category, rating_scores):
         final_score = round(fund_rating_score * RATING_WEIGHT + technical_score * TECHNICAL_WEIGHT, 2)
         score_basis = "blended"
 
-    if final_score >= 80:
+    if final_score >= 75:
         rating = "Strong hold"
     elif final_score >= 60:
         rating = "Hold"
-    elif final_score >= 40:
+    elif final_score >= 50:
         rating = "Neutral"
-    elif final_score >= 20:
+    elif final_score >= 40:
         rating = "Sell"
     else:
         rating = "Strong sell"
