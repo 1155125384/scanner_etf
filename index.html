@@ -712,12 +712,14 @@ function render(){
 }
 
 // ---- header stats ----
-function buildStats(){
+function buildStats(lastModified){
   document.getElementById('statTotal').textContent = ROWS.length;
   const avg = ROWS.reduce((s,r)=>s+r[IDX.final_score],0)/ROWS.length;
   document.getElementById('statAvg').textContent = avg.toFixed(1);
-  const dates = ROWS.map(r=>r[IDX.rating_date]).filter(Boolean);
-  document.getElementById('statDate').textContent = dates.length ? dates.sort().slice(-1)[0] : '–';
+  const modifiedDate = lastModified ? new Date(lastModified) : null;
+  document.getElementById('statDate').textContent = modifiedDate && !Number.isNaN(modifiedDate.getTime())
+    ? modifiedDate.toLocaleString()
+    : '–';
 }
 
 // ---- search input ----
@@ -744,7 +746,7 @@ async function init(){
     ROWS = rowsFromCSV(await response.text());
     ratings = [...new Set(ROWS.map(r=>r[IDX.rating]))].sort();
     categories = [...new Set(ROWS.map(r=>r[IDX.category]))].sort();
-    buildStats();
+    buildStats(response.headers.get('Last-Modified'));
     buildHeader();
     buildRatingChips();
     buildCategoryChips();
