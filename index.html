@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ETF Scanner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#ECEFEE;
+    --panel:#FFFFFF;
+    --ink:#172224;
+    --ink-soft:#5B6A6E;
+    --ink-faint:#8B979A;
+    --line:#D7DEDC;
+    --line-strong:#B9C4C2;
+    --teal:#1F5C50;
+    --teal-soft:#E4EEEC;
+    --rust:#A2431F;
+    --rust-soft:#F5E6DF;
+    --amber:#94661C;
+    --amber-soft:#F1E7D3;
+    --pos:#1E6B4F;
+    --neg:#AA3B2C;
+    --focus:#2A5DB0;
+    font-size:16px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:'IBM Plex Sans',sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  ::selection{background:#c9dcd7;}
+  a{color:inherit;}
+
+  /* ---------- Masthead ---------- */
+  .masthead{
+    max-width:1400px;
+    margin:0 auto;
+    padding:38px 28px 22px;
+    display:flex;
+    align-items:flex-end;
+    justify-content:space-between;
+    gap:24px;
+    flex-wrap:wrap;
+    border-bottom:2px solid var(--ink);
+  }
+  .masthead h1{
+    font-family:'Source Serif 4',serif;
+    font-weight:700;
+    font-size:2.6rem;
+    line-height:1;
+    margin:0 0 8px 0;
+    letter-spacing:-0.01em;
+  }
+  .masthead .sub{
+    font-size:0.95rem;
+    color:var(--ink-soft);
+    max-width:46ch;
+  }
+  .stat-strip{
+    display:flex;
+    gap:28px;
+  }
+  .stat{
+    text-align:right;
+  }
+  .stat .num{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:1.5rem;
+    font-weight:600;
+    display:block;
+    line-height:1.15;
+  }
+  .stat .label{
+    font-size:0.75rem;
+    color:var(--ink-soft);
+  }
+
+  /* ---------- Controls ---------- */
+  .controls{
+    max-width:1400px;
+    margin:0 auto;
+    padding:20px 28px 16px;
+    display:flex;
+    flex-direction:column;
+    gap:14px;
+  }
+  .control-row{
+    display:flex;
+    align-items:center;
+    gap:14px;
+    flex-wrap:wrap;
+  }
+  .control-row .row-label{
+    font-size:0.78rem;
+    color:var(--ink-soft);
+    min-width:78px;
+    flex-shrink:0;
+  }
+  .search-wrap{
+    position:relative;
+    flex:1 1 260px;
+    max-width:360px;
+  }
+  .search-wrap input{
+    width:100%;
+    padding:9px 12px 9px 32px;
+    border:1px solid var(--line-strong);
+    background:var(--panel);
+    font-family:'IBM Plex Sans',sans-serif;
+    font-size:0.92rem;
+    color:var(--ink);
+  }
+  .search-wrap input:focus{
+    outline:2px solid var(--focus);
+    outline-offset:-1px;
+  }
+  .search-wrap svg{
+    position:absolute;
+    left:10px;
+    top:50%;
+    transform:translateY(-50%);
+    opacity:0.55;
+    pointer-events:none;
+  }
+  .result-count{
+    font-size:0.82rem;
+    color:var(--ink-soft);
+    font-family:'IBM Plex Mono',monospace;
+  }
+
+  .chip{
+    border:1px solid var(--line-strong);
+    background:var(--panel);
+    color:var(--ink-soft);
+    font-family:'IBM Plex Sans',sans-serif;
+    font-size:0.82rem;
+    padding:6px 12px;
+    cursor:pointer;
+    transition:background 0.12s, color 0.12s, border-color 0.12s;
+  }
+  .chip:hover{border-color:var(--ink-soft);}
+  .chip.active{
+    background:var(--ink);
+    border-color:var(--ink);
+    color:#fff;
+  }
+  .chip.rating-Sell.active{background:var(--neg);border-color:var(--neg);}
+  .chip.rating-Hold.active{background:var(--amber);border-color:var(--amber);}
+  .chip.rating-Neutral.active{background:var(--ink-soft);border-color:var(--ink-soft);}
+  .chip.rating-Strong-Sell.active{background:var(--rust);border-color:var(--rust);}
+  .chip.rating-Strong-Hold.active{background:var(--teal);border-color:var(--teal);}
+
+  .colgroup-btn{
+    border:1px solid var(--line-strong);
+    background:var(--panel);
+    color:var(--ink);
+    font-family:'IBM Plex Sans',sans-serif;
+    font-size:0.82rem;
+    padding:6px 12px;
+    cursor:pointer;
+    display:flex;
+    align-items:center;
+    gap:7px;
+  }
+  .colgroup-btn .dot{
+    width:7px;height:7px;border-radius:50%;
+    background:var(--line-strong);
+    flex-shrink:0;
+  }
+  .colgroup-btn.active .dot{background:var(--teal);}
+  .colgroup-btn.active{border-color:var(--teal);color:var(--teal);}
+  .colgroup-btn:hover{border-color:var(--ink-soft);}
+
+  .reset-btn{
+    border:none;
+    background:none;
+    color:var(--ink-soft);
+    font-size:0.8rem;
+    text-decoration:underline;
+    cursor:pointer;
+    padding:4px 2px;
+  }
+  .reset-btn:hover{color:var(--ink);}
+
+  /* ---------- Table ---------- */
+  .table-wrap{
+    max-width:1400px;
+    margin:0 auto 60px;
+    padding:0 28px;
+    overflow-x:auto;
+  }
+  table{
+    border-collapse:collapse;
+    width:100%;
+    background:var(--panel);
+    font-family:'IBM Plex Mono',monospace;
+    font-size:0.82rem;
+  }
+  thead th{
+    position:sticky;
+    top:0;
+    background:var(--ink);
+    color:#EDEFEA;
+    font-family:'IBM Plex Sans',sans-serif;
+    font-weight:500;
+    font-size:0.72rem;
+    text-align:right;
+    padding:10px 10px;
+    white-space:nowrap;
+    cursor:pointer;
+    user-select:none;
+    border-right:1px solid rgba(255,255,255,0.08);
+    z-index:5;
+  }
+  thead th:first-child,thead th.col-ticker,thead th.col-cat{text-align:left;}
+  thead th:hover{background:#2B3A3D;}
+  thead th.sorted{background:var(--teal);}
+  thead th .arrow{
+    display:inline-block;
+    width:9px;
+    margin-left:3px;
+    opacity:0.75;
+    font-size:0.68rem;
+  }
+  tbody td{
+    padding:8px 10px;
+    text-align:right;
+    border-bottom:1px solid var(--line);
+    white-space:nowrap;
+  }
+  tbody td.col-ticker,tbody td.col-cat,tbody td.col-flags{text-align:left;white-space:normal;}
+  tbody tr:nth-child(even){background:#F5F7F6;}
+  tbody tr:hover{background:var(--teal-soft);}
+  tbody td.rank{
+    color:var(--ink-faint);
+    font-size:0.76rem;
+  }
+  td.ticker{
+    font-family:'IBM Plex Sans',sans-serif;
+    font-weight:600;
+    color:var(--ink);
+  }
+  .badge{
+    display:inline-block;
+    padding:2px 8px;
+    font-family:'IBM Plex Sans',sans-serif;
+    font-size:0.72rem;
+    font-weight:500;
+    border:1px solid transparent;
+  }
+  .badge-Sell{background:var(--rust-soft);color:var(--rust);}
+  .badge-Hold{background:var(--amber-soft);color:var(--amber);}
+  .badge-Neutral{background:#E7EBEA;color:var(--ink-soft);}
+  .badge-Strong-Sell{background:var(--rust);color:#fff;}
+  .badge-Strong-Hold{background:var(--teal);color:#fff;}
+  .cat-tag{
+    font-family:'IBM Plex Sans',sans-serif;
+    font-size:0.72rem;
+    color:var(--ink-soft);
+  }
+  .pos{color:var(--pos);}
+  .neg{color:var(--neg);}
+  .zero{color:var(--ink-faint);}
+  .na{color:var(--ink-faint);}
+  .flags-cell{
+    font-family:'IBM Plex Sans',sans-serif;
+    font-size:0.72rem;
+    color:var(--ink-soft);
+    max-width:340px;
+  }
+  .flag-tag{
+    display:inline-block;
+    background:#F0F2F1;
+    border:1px solid var(--line);
+    padding:1px 6px;
+    margin:1px 3px 1px 0;
+    white-space:nowrap;
+  }
+  td[data-g], th[data-g]{transition:none;}
+  .no-rows{
+    text-align:center;
+    padding:40px;
+    color:var(--ink-soft);
+    font-family:'IBM Plex Sans',sans-serif;
+  }
+
+  footer{
+    max-width:1400px;
+    margin:0 auto;
+    padding:0 28px 40px;
+    color:var(--ink-faint);
+    font-size:0.78rem;
+    font-family:'IBM Plex Sans',sans-serif;
+  }
+
+  @media (max-width:720px){
+    .masthead{padding:24px 16px 16px;}
+    .masthead h1{font-size:1.9rem;}
+    .stat-strip{gap:16px;}
+    .stat .num{font-size:1.15rem;}
+    .controls{padding:16px 16px;}
+    .table-wrap{padding:0 16px;}
+  }
+</style>
+</head>
+<body>
+
+<div class="masthead">
+  <div>
+    <h1>ETF Scanner</h1>
+    <div class="sub">Composite scoring across fundamentals, technicals and relative strength for the tracked ETF universe.</div>
+  </div>
+  <div class="stat-strip">
+    <div class="stat"><span class="num" id="statTotal">–</span><span class="label">funds scanned</span></div>
+    <div class="stat"><span class="num" id="statAvg">–</span><span class="label">avg score</span></div>
+    <div class="stat"><span class="num" id="statDate">–</span><span class="label">as of</span></div>
+  </div>
+</div>
+
+<div class="controls">
+  <div class="control-row">
+    <span class="row-label">Search</span>
+    <div class="search-wrap">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="searchInput" type="text" placeholder="Ticker, category, flag…">
+    </div>
+    <span class="result-count" id="resultCount"></span>
+    <button class="reset-btn" id="resetBtn">reset filters</button>
+  </div>
+
+  <div class="control-row">
+    <span class="row-label">Rating</span>
+    <div id="ratingChips"></div>
+  </div>
+
+  <div class="control-row">
+    <span class="row-label">Category</span>
+    <div id="categoryChips"></div>
+  </div>
+
+  <div class="control-row">
+    <span class="row-label">Columns</span>
+    <div id="columnToggles"></div>
+  </div>
+</div>
+
+<div class="table-wrap">
+  <table id="etfTable">
+    <thead>
+      <tr id="headerRow"></tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+</div>
+
+<footer>Data reflects the uploaded scan snapshot. Click any column header to rank by that metric. Relative-strength figures are in percentage points versus the named benchmark.</footer>
+
+<script>
+const COLS = ["Ticker", "final_score", "score_basis", "rating", "category", "price", "weighted_rating", "fund_rating_score", "rating_cycles", "rating_date", "technical_score", "vs50MA%", "vs200MA%", "RSI", "VolSurge", "1D%", "1W%", "1M%", "AnnVol%", "MaxDD%", "AvgDollarVol", "BarsFetched", "RelStrength_AvgBench", "RelStrength_vs_SPY", "RelStrength_vs_DJI", "RelStrength_vs_SPX", "RelStrength_vs_IXIC", "Flags", "RelStrength_vs_AGG", "RelStrength_vs_BND", "RelStrength_vs_EFA", "RelStrength_vs_VXUS", "RelStrength_vs_EEM", "RelStrength_vs_VNQ", "RelStrength_vs_DBC", "RelStrength_vs_GLD"];
+let ROWS = [];
+
+// index lookup
+const IDX = {};
+COLS.forEach((c,i)=>IDX[c]=i);
+
+function parseCSV(text){
+  const rows = [];
+  let row = [], value = '', quoted = false;
+  for(let i=0; i<text.length; i++){
+    const char = text[i];
+    const next = text[i+1];
+    if(char === '"' && quoted && next === '"'){
+      value += '"';
+      i++;
+    } else if(char === '"'){
+      quoted = !quoted;
+    } else if(char === ',' && !quoted){
+      row.push(value);
+      value = '';
+    } else if((char === '\n' || char === '\r') && !quoted){
+      if(char === '\r' && next === '\n') i++;
+      row.push(value);
+      if(row.some(cell => cell !== '')) rows.push(row);
+      row = [];
+      value = '';
+    } else {
+      value += char;
+    }
+  }
+  row.push(value);
+  if(row.some(cell => cell !== '')) rows.push(row);
+  return rows;
+}
+
+function rowsFromCSV(text){
+  const parsed = parseCSV(text);
+  if(!parsed.length) throw new Error('The CSV file is empty.');
+  const header = parsed.shift().map(cell => cell.trim());
+  const sourceIndex = Object.fromEntries(header.map((name, index) => [name, index]));
+  const missing = COLS.filter(name => sourceIndex[name] === undefined);
+  if(missing.length) throw new Error('Missing CSV columns: ' + missing.join(', '));
+  const textColumns = new Set(['Ticker','score_basis','rating','category','rating_cycles','rating_date','Flags']);
+  return parsed.map(sourceRow => COLS.map(column => {
+    const raw = (sourceRow[sourceIndex[column]] || '').trim();
+    if(raw === '') return null;
+    if(textColumns.has(column)) return raw;
+    const number = Number(raw);
+    return Number.isNaN(number) ? raw : number;
+  }));
+}
+
+// ---- column metadata: key, header label, group, formatter type ----
+// groups: core (always visible), rating, technical, performance, relstrength, flags
+const META = [
+  {k:'Ticker',            label:'Ticker',        group:'core',        type:'ticker'},
+  {k:'final_score',       label:'Score',         group:'core',        type:'num1'},
+  {k:'rating',            label:'Rating',        group:'core',        type:'rating'},
+  {k:'category',          label:'Category',      group:'core',        type:'cat'},
+  {k:'price',             label:'Price',         group:'core',        type:'price'},
+  {k:'score_basis',       label:'Basis',         group:'rating',      type:'str'},
+  {k:'weighted_rating',   label:'Wtd Rating',    group:'rating',      type:'num1'},
+  {k:'fund_rating_score', label:'Rating Score',  group:'rating',      type:'num0'},
+  {k:'rating_cycles',     label:'Cycles',        group:'rating',      type:'str'},
+  {k:'rating_date',       label:'Rating Date',   group:'rating',      type:'str'},
+  {k:'technical_score',   label:'Tech Score',    group:'technical',   type:'num0'},
+  {k:'vs50MA%',           label:'vs 50MA',       group:'technical',   type:'pctSigned'},
+  {k:'vs200MA%',          label:'vs 200MA',      group:'technical',   type:'pctSigned'},
+  {k:'RSI',               label:'RSI',           group:'technical',   type:'num1'},
+  {k:'VolSurge',          label:'Vol Surge',     group:'technical',   type:'num2x'},
+  {k:'1D%',                label:'1D',           group:'performance', type:'pctSigned'},
+  {k:'1W%',                label:'1W',           group:'performance', type:'pctSigned'},
+  {k:'1M%',                label:'1M',           group:'performance', type:'pctSigned'},
+  {k:'AnnVol%',            label:'Ann Vol',      group:'performance', type:'pct'},
+  {k:'MaxDD%',             label:'Max DD',       group:'performance', type:'pctSigned'},
+  {k:'AvgDollarVol',       label:'Avg $ Vol',    group:'performance', type:'compact'},
+  {k:'BarsFetched',        label:'Bars',         group:'performance', type:'int'},
+  {k:'RelStrength_AvgBench',label:'vs AvgBench', group:'relstrength', type:'pctSigned'},
+  {k:'RelStrength_vs_SPY', label:'vs SPY',       group:'relstrength', type:'pctSigned'},
+  {k:'RelStrength_vs_DJI', label:'vs DJI',       group:'relstrength', type:'pctSigned'},
+  {k:'RelStrength_vs_SPX', label:'vs SPX',       group:'relstrength', type:'pctSigned'},
+  {k:'RelStrength_vs_IXIC',label:'vs IXIC',      group:'relstrength', type:'pctSigned'},
+  {k:'RelStrength_vs_AGG', label:'vs AGG',       group:'relstrength', type:'pctSigned'},
+  {k:'RelStrength_vs_BND', label:'vs BND',       group:'relstrength', type:'pctSigned'},
+  {k:'RelStrength_vs_EFA', label:'vs EFA',       group:'relstrength', type:'pctSigned'},
+  {k:'RelStrength_vs_VXUS',label:'vs VXUS',      group:'relstrength', type:'pctSigned'},
+  {k:'RelStrength_vs_EEM', label:'vs EEM',       group:'relstrength', type:'pctSigned'},
+  {k:'RelStrength_vs_VNQ', label:'vs VNQ',       group:'relstrength', type:'pctSigned'},
+  {k:'RelStrength_vs_DBC', label:'vs DBC',       group:'relstrength', type:'pctSigned'},
+  {k:'RelStrength_vs_GLD', label:'vs GLD',       group:'relstrength', type:'pctSigned'},
+  {k:'Flags',              label:'Flags',        group:'flags',       type:'flags'},
+];
+
+const GROUP_LABELS = {
+  rating:'Fundamentals & rating',
+  technical:'Technical',
+  performance:'Performance',
+  relstrength:'Relative strength',
+  flags:'Flags'
+};
+// default visibility per group (core is always on)
+const groupState = {
+  rating:true, technical:true, performance:true, relstrength:false, flags:true
+};
+
+// ---- state ----
+let sortKey = 'final_score';
+let sortDir = 'desc';
+let searchTerm = '';
+let activeRatings = new Set();
+let activeCategories = new Set();
+
+let ratings = [];
+let categories = [];
+
+function ratingClass(value){
+  return String(value).replace(/[^a-z0-9]+/gi, '-');
+}
+
+// ---- formatters ----
+function fmt(type, val){
+  if(val===null || val===undefined || val===''){
+    return {text:'–', cls:'na'};
+  }
+  switch(type){
+    case 'ticker': return {text:val, cls:''};
+    case 'str': return {text:val, cls:''};
+    case 'price': return {text:'$'+Number(val).toFixed(2), cls:''};
+    case 'num0': return {text:Math.round(val).toString(), cls:''};
+    case 'num1': return {text:Number(val).toFixed(1), cls:''};
+    case 'num2x': return {text:Number(val).toFixed(2)+'x', cls:''};
+    case 'int': return {text:Math.round(val).toLocaleString(), cls:''};
+    case 'pct': {
+      return {text:Number(val).toFixed(1)+'%', cls:''};
+    }
+    case 'pctSigned': {
+      const n = Number(val);
+      const cls = n>0?'pos':(n<0?'neg':'zero');
+      const sign = n>0?'+':'';
+      return {text:sign+n.toFixed(1)+'%', cls:cls};
+    }
+    case 'compact': {
+      const n = Number(val);
+      let text;
+      if(n>=1e9) text='$'+(n/1e9).toFixed(1)+'B';
+      else if(n>=1e6) text='$'+(n/1e6).toFixed(1)+'M';
+      else if(n>=1e3) text='$'+(n/1e3).toFixed(0)+'K';
+      else text='$'+n.toFixed(0);
+      return {text:text, cls:''};
+    }
+    default: return {text:String(val), cls:''};
+  }
+}
+
+// ---- build header ----
+const headerRow = document.getElementById('headerRow');
+function buildHeader(){
+  headerRow.innerHTML='';
+  const rankTh = document.createElement('th');
+  rankTh.textContent='#';
+  rankTh.style.cursor='default';
+  headerRow.appendChild(rankTh);
+  META.forEach(m=>{
+    const th = document.createElement('th');
+    th.dataset.g = m.group;
+    th.dataset.key = m.k;
+    if(m.k==='Ticker') th.classList.add('col-ticker');
+    if(m.k==='category') th.classList.add('col-cat');
+    th.innerHTML = m.label + '<span class="arrow"></span>';
+    th.addEventListener('click',()=>{
+      if(sortKey===m.k){ sortDir = sortDir==='desc'?'asc':'desc'; }
+      else { sortKey=m.k; sortDir = (m.type==='ticker'||m.type==='str'||m.type==='cat'||m.type==='rating'||m.type==='flags') ? 'asc':'desc'; }
+      render();
+    });
+    headerRow.appendChild(th);
+  });
+  updateSortIndicator();
+}
+
+function updateSortIndicator(){
+  [...headerRow.children].forEach(th=>{
+    th.classList.remove('sorted');
+    const arrow = th.querySelector('.arrow');
+    if(arrow) arrow.textContent='';
+  });
+  const th = [...headerRow.children].find(t=>t.dataset.key===sortKey);
+  if(th){
+    th.classList.add('sorted');
+    th.querySelector('.arrow').textContent = sortDir==='desc' ? '▼' : '▲';
+  }
+}
+
+// ---- build chips ----
+const ratingChipsEl = document.getElementById('ratingChips');
+function buildRatingChips(){
+  ratingChipsEl.innerHTML='';
+  ratings.forEach(r=>{
+    const b = document.createElement('button');
+    b.className = 'chip rating-'+ratingClass(r);
+    b.textContent = r;
+    b.addEventListener('click',()=>{
+      if(activeRatings.has(r)) activeRatings.delete(r); else activeRatings.add(r);
+      render();
+    });
+    ratingChipsEl.appendChild(b);
+  });
+}
+const catChipsEl = document.getElementById('categoryChips');
+function buildCategoryChips(){
+  catChipsEl.innerHTML='';
+  categories.forEach(c=>{
+    const b = document.createElement('button');
+    b.className = 'chip';
+    b.textContent = c;
+    b.addEventListener('click',()=>{
+      if(activeCategories.has(c)) activeCategories.delete(c); else activeCategories.add(c);
+      render();
+    });
+    catChipsEl.appendChild(b);
+  });
+}
+function refreshChipStates(){
+  [...ratingChipsEl.children].forEach(b=>b.classList.toggle('active', activeRatings.has(b.textContent)));
+  [...catChipsEl.children].forEach(b=>b.classList.toggle('active', activeCategories.has(b.textContent)));
+}
+
+// ---- column group toggles ----
+const colToggleEl = document.getElementById('columnToggles');
+function buildColumnToggles(){
+  colToggleEl.innerHTML='';
+  Object.keys(GROUP_LABELS).forEach(g=>{
+    const b = document.createElement('button');
+    b.className = 'colgroup-btn' + (groupState[g] ? ' active':'');
+    b.innerHTML = '<span class="dot"></span>' + GROUP_LABELS[g];
+    b.addEventListener('click',()=>{
+      groupState[g] = !groupState[g];
+      b.classList.toggle('active', groupState[g]);
+      applyColumnVisibility();
+    });
+    colToggleEl.appendChild(b);
+  });
+}
+function applyColumnVisibility(){
+  document.querySelectorAll('[data-g]').forEach(el=>{
+    const g = el.dataset.g;
+    el.style.display = (g==='core' || groupState[g]) ? '' : 'none';
+  });
+}
+
+// ---- filtering + sorting ----
+function getFiltered(){
+  let out = ROWS;
+  if(activeRatings.size>0){
+    out = out.filter(r=>activeRatings.has(r[IDX.rating]));
+  }
+  if(activeCategories.size>0){
+    out = out.filter(r=>activeCategories.has(r[IDX.category]));
+  }
+  if(searchTerm){
+    const t = searchTerm.toLowerCase();
+    out = out.filter(r=>{
+      const flagsVal = r[IDX.Flags] || '';
+      return (r[IDX.Ticker]||'').toLowerCase().includes(t)
+        || (r[IDX.category]||'').toLowerCase().includes(t)
+        || (r[IDX.rating]||'').toLowerCase().includes(t)
+        || flagsVal.toLowerCase().includes(t);
+    });
+  }
+  return out;
+}
+
+function sortRows(rows){
+  const i = IDX[sortKey];
+  const dir = sortDir==='desc' ? -1 : 1;
+  return [...rows].sort((a,b)=>{
+    let va = a[i], vb = b[i];
+    const aNull = va===null||va===undefined, bNull = vb===null||vb===undefined;
+    if(aNull && bNull) return 0;
+    if(aNull) return 1; // nulls always last
+    if(bNull) return -1;
+    if(typeof va === 'string' || typeof vb === 'string'){
+      return dir * String(va).localeCompare(String(vb));
+    }
+    return dir * (va - vb);
+  });
+}
+
+// ---- render table body ----
+const tbody = document.getElementById('tbody');
+function renderRows(){
+  const filtered = sortRows(getFiltered());
+  document.getElementById('resultCount').textContent = filtered.length + ' / ' + ROWS.length;
+
+  if(filtered.length===0){
+    tbody.innerHTML = '<tr><td class="no-rows" colspan="'+(META.length+1)+'">No ETFs match the current filters.</td></tr>';
+    return;
+  }
+
+  const frag = document.createDocumentFragment();
+  filtered.forEach((r,i)=>{
+    const tr = document.createElement('tr');
+
+    const rankTd = document.createElement('td');
+    rankTd.className='rank';
+    rankTd.textContent = i+1;
+    tr.appendChild(rankTd);
+
+    META.forEach(m=>{
+      const td = document.createElement('td');
+      td.dataset.g = m.group;
+      const val = r[IDX[m.k]];
+
+      if(m.type==='ticker'){
+        td.className='ticker col-ticker';
+        td.textContent = val;
+      } else if(m.type==='rating'){
+        td.innerHTML = '<span class="badge badge-'+ratingClass(val)+'">'+val+'</span>';
+      } else if(m.type==='cat'){
+        td.className='col-cat';
+        td.innerHTML = '<span class="cat-tag">'+val+'</span>';
+      } else if(m.type==='flags'){
+        td.className='flags-cell col-flags';
+        if(val){
+          td.innerHTML = val.split(',').map(f=>'<span class="flag-tag">'+f.trim()+'</span>').join('');
+        } else {
+          td.innerHTML = '<span class="na">–</span>';
+        }
+      } else {
+        const f = fmt(m.type, val);
+        td.textContent = f.text;
+        if(f.cls) td.className = f.cls;
+      }
+      tr.appendChild(td);
+    });
+
+    frag.appendChild(tr);
+  });
+  tbody.innerHTML='';
+  tbody.appendChild(frag);
+  applyColumnVisibility();
+}
+
+function render(){
+  updateSortIndicator();
+  refreshChipStates();
+  renderRows();
+}
+
+// ---- header stats ----
+function buildStats(){
+  document.getElementById('statTotal').textContent = ROWS.length;
+  const avg = ROWS.reduce((s,r)=>s+r[IDX.final_score],0)/ROWS.length;
+  document.getElementById('statAvg').textContent = avg.toFixed(1);
+  const dates = ROWS.map(r=>r[IDX.rating_date]).filter(Boolean);
+  document.getElementById('statDate').textContent = dates.length ? dates.sort().slice(-1)[0] : '–';
+}
+
+// ---- search input ----
+document.getElementById('searchInput').addEventListener('input', e=>{
+  searchTerm = e.target.value.trim();
+  render();
+});
+
+document.getElementById('resetBtn').addEventListener('click', ()=>{
+  searchTerm='';
+  document.getElementById('searchInput').value='';
+  activeRatings.clear();
+  activeCategories.clear();
+  sortKey='final_score';
+  sortDir='desc';
+  render();
+});
+
+// ---- init ----
+async function init(){
+  try{
+    const response = await fetch('etf_scanner.csv', {cache:'no-store'});
+    if(!response.ok) throw new Error('CSV request failed (' + response.status + ').');
+    ROWS = rowsFromCSV(await response.text());
+    ratings = [...new Set(ROWS.map(r=>r[IDX.rating]))].sort();
+    categories = [...new Set(ROWS.map(r=>r[IDX.category]))].sort();
+    buildStats();
+    buildHeader();
+    buildRatingChips();
+    buildCategoryChips();
+    buildColumnToggles();
+    render();
+    applyColumnVisibility();
+  } catch(error){
+    tbody.innerHTML = '<tr><td class="no-rows" colspan="'+(META.length+1)+'">Unable to load etf_scanner.csv: '+error.message+'</td></tr>';
+  }
+}
+
+init();
+</script>
+</body>
+</html>
