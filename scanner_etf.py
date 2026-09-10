@@ -32,17 +32,26 @@ from pathlib import Path
 # the final ETF screen.
 CONFIG = {
     "webull": {
-        "sandbox_app_key": os.getenv('SANDBOX_KEY'),
-        "sandbox_app_secret": os.getenv('SANDBOX_SECRET'),
+        "sandbox_app_key": "42bd186fb65ea76de309d69cf12f024e",
+        "sandbox_app_secret": "29feb64b59d6b1b6b2d2aa8cea8a1b8d",
         "sandbox_host": "api.sandbox.webull.hk",
-        "account_app_key": os.getenv('APP_KEY'),
-        "account_app_secret": os.getenv('APP_SECRET'),
+        "account_app_key": "63d0bd6afb98053ff2ef998f47c7106e",
+        "account_app_secret": "a2f11b87ef8d765c6e07f75e7583ca38",
+        # "sandbox_app_key": os.getenv('SANDBOX_KEY'),
+        # "sandbox_app_secret": os.getenv('SANDBOX_SECRET'),
+        # "sandbox_host": "api.sandbox.webull.hk",
+        # "account_app_key": os.getenv('APP_KEY'),
+        # "account_app_secret": os.getenv('APP_SECRET'),
+        "token_host": "api.sandbox.webull.hk",
+        "token_api_version": "v3",
         "region": Region.HK.value,
         "token_environment_variable": "WEBULL_ACCESS_TOKEN",
         "token_file": "conf/token.txt",
         "signature_algorithm": "HMAC-SHA1",
         "signature_version": "1.0",
         "api_version": "v2",
+        "token_create_endpoint": "/auth/tokens/create",
+        "refresh_token_on_start": True,
         "ratings_endpoint": "/market-data/fundamentals/fund-ratings/get",
         "ratings_category": "US_STOCK",
         "account_page_size": 100,
@@ -195,6 +204,7 @@ SANDBOX_HOST = WEBULL_CONFIG["sandbox_host"]
 ACCOUNT_APP_KEY = WEBULL_CONFIG["account_app_key"]
 ACCOUNT_APP_SECRET = WEBULL_CONFIG["account_app_secret"]
 SANDBOX_BASE_URL = f"https://{SANDBOX_HOST}"
+TOKEN_BASE_URL = f"https://{WEBULL_CONFIG['token_host']}"
 
 
 def load_access_token():
@@ -211,13 +221,6 @@ def load_access_token():
 
 
 ACCESS_TOKEN = load_access_token()
-
-if not ACCESS_TOKEN:
-    raise RuntimeError(
-        f"No Webull access token found. Set the GitHub Actions secret "
-        f"WEBULL_ACCESS_TOKEN and map it to the environment, or add the "
-        f"token as the first non-empty line of {WEBULL_CONFIG['token_file']}."
-    )
 
 
 def generate_signature(path, query_params, body_string, app_key, app_secret, host, timestamp, nonce):
@@ -259,6 +262,8 @@ def call_api(
     app_secret=SANDBOX_APP_SECRET,
     host=SANDBOX_HOST,
     base_url=SANDBOX_BASE_URL,
+    api_version=None,
+    include_app_secret_header=False,
 ):
     query_params = query_params or {}
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -279,8 +284,10 @@ def call_api(
         "x-signature-algorithm": WEBULL_CONFIG["signature_algorithm"],
         "x-signature-version": WEBULL_CONFIG["signature_version"],
         "x-signature-nonce": nonce,
-        "x-version": WEBULL_CONFIG["api_version"],
+        "x-version": api_version or WEBULL_CONFIG["api_version"],
     }
+    if include_app_secret_header:
+        headers["x-app-secret"] = app_secret
     if access_token is not None:
         if not access_token:
             raise ValueError(
@@ -298,6 +305,61 @@ def call_api(
         resp = requests.post(url, headers=headers, data=body_string)
 
     return resp
+
+
+def create_access_token():
+    """Create a fresh short-lived token for this run.
+
+    The token-create request is signed with the sandbox app credentials and
+    does not send an existing access token. The returned token is then used
+    for the subsequent market-data requests.
+    """
+    response = call_api(
+        "POST",
+        WEBULL_CONFIG["token_create_endpoint"],
+        body={},
+        access_token=None,
+        host=SANDBOX_HOST,
+        base_url=TOKEN_BASE_URL,
+        api_version=WEBULL_CONFIG["token_api_version"],
+        include_app_secret_header=True,
+    )
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+
+    if not response.ok or not isinstance(payload, dict):
+        raise RuntimeError(
+            f"Unable to create Webull access token: HTTP {response.status_code} "
+            f"{response.text[:500]}"
+        )
+
+    token = (
+        payload.get("access_token")
+        or payload.get("accessToken")
+        or payload.get("token")
+    )
+    if not token:
+        raise RuntimeError(
+            f"Webull token response did not contain an access token: {payload}"
+        )
+    return token
+
+
+if WEBULL_CONFIG["refresh_token_on_start"]:
+    if not SANDBOX_APP_KEY or not SANDBOX_APP_SECRET:
+        raise RuntimeError(
+            "SANDBOX_KEY and SANDBOX_SECRET must be configured before "
+            "creating a Webull sandbox access token."
+        )
+    ACCESS_TOKEN = create_access_token()
+elif not ACCESS_TOKEN:
+    raise RuntimeError(
+        f"No Webull access token found. Set the GitHub Actions secret "
+        f"WEBULL_ACCESS_TOKEN and map it to the environment, or add the "
+        f"token as the first non-empty line of {WEBULL_CONFIG['token_file']}."
+    )
 
 def fetch_ftp_file(filename):
     ftp = ftplib.FTP(FTP_CONFIG["host"])
