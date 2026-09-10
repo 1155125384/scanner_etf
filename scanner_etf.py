@@ -195,6 +195,8 @@ OUTPUT_CONFIG = CONFIG["output"]
 
 SANDBOX_APP_KEY = WEBULL_CONFIG["sandbox_app_key"]
 SANDBOX_APP_SECRET = WEBULL_CONFIG["sandbox_app_secret"]
+print(SANDBOX_APP_KEY)
+print(SANDBOX_APP_SECRET)
 SANDBOX_HOST = WEBULL_CONFIG["sandbox_host"]
 ACCOUNT_APP_KEY = WEBULL_CONFIG["account_app_key"]
 ACCOUNT_APP_SECRET = WEBULL_CONFIG["account_app_secret"]
