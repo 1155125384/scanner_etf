@@ -22,20 +22,203 @@ import sys
 from io import StringIO
 import io
 import logging
+from pathlib import Path
 
-APP_KEY = os.getenv('APP_KEY')
-APP_SECRET = os.getenv('APP_SECRET')
-HOST = "api.webull.hk" 
-BASE_URL = f"https://{HOST}"
-ACCESS_TOKEN = os.getenv("WEBULL_ACCESS_TOKEN", "").strip()
+# =============================================================================
+# Configuration
+# =============================================================================
+# Change values in this section only. The rest of the file implements the
+# pipeline: collect holdings, download ratings, calculate scores, and export
+# the final ETF screen.
+CONFIG = {
+    "webull": {
+        "sandbox_app_key": "42bd186fb65ea76de309d69cf12f024e",
+        "sandbox_app_secret": "29feb64b59d6b1b6b2d2aa8cea8a1b8d",
+        "sandbox_host": "api.sandbox.webull.hk",
+        "account_app_key": "63d0bd6afb98053ff2ef998f47c7106e",
+        "account_app_secret": "a2f11b87ef8d765c6e07f75e7583ca38",
+        "region": Region.HK.value,
+        "token_environment_variable": "WEBULL_ACCESS_TOKEN",
+        "token_file": "conf/token.txt",
+        "signature_algorithm": "HMAC-SHA1",
+        "signature_version": "1.0",
+        "api_version": "v2",
+        "ratings_endpoint": "/market-data/fundamentals/fund-ratings/get",
+        "ratings_category": "US_STOCK",
+        "account_page_size": 100,
+    },
+    "ftp": {
+        "host": "ftp.nasdaqtrader.com",
+        "directory": "symboldirectory",
+        "listed_file": "nasdaqlisted.txt",
+        "other_listed_file": "otherlisted.txt",
+        "delimiter": "|",
+    },
+    "ratings": {
+        "request_delay_seconds": 0.1,
+        "retry_wait_seconds": 10,
+        "max_retries": 5,
+        "retry_backoff_base_seconds": 2,
+        "retry_backoff_max_seconds": 60,
+        "lookback_years": 1,
+        "cycle_weights": {3: 1.0, 5: 1.5, 10: 2.0},
+        "rating_scale_max": 5,
+        "rating_decimal_places": 1,
+        "minimum_weighted_rating": 4.0,
+        "not_found_status_codes": {404, 417},
+        "rate_limit_status_code": 429,
+        "not_found_markers": (
+            "not found",
+            "no rating",
+            "rating not available",
+            "no data",
+        ),
+    },
+    "progress": {
+        "update_interval_seconds": 1.0,
+        "poll_interval_seconds": 0.1,
+        "bar_length": 30,
+        "line_width": 200,
+    },
+    "screen": {
+        "timeframe": "hourly",
+        "minimum_history_bars": 30,
+        "holdings_metadata_delay_seconds": 0.3,
+        "auto_adjust_prices": True,
+        "request_delay_seconds": 1.5,
+        "max_retries": 3,
+        "retry_backoff_seconds": 5,
+        "rating_weight": 0.2,
+        "technical_weight": 0.8,
+        "annualized_trading_days": 252,
+        "annualized_bars_per_day": 6.5,
+        "liquidity_lookback_days": 30,
+        "volume_surge_threshold": 1.5,
+        "minimum_average_dollar_volume": 1_000_000,
+        "exclude_low_liquidity": False,
+        "macd": {"fast": 12, "slow": 26, "signal": 9},
+        "rsi": {"ideal": 55, "overbought": 70, "oversold": 30, "distance": 45},
+        "score_ranges": {
+            "trend": (-10, 10),
+            "volume": (0.5, 2.5),
+            "price_momentum": (-40, 40),
+            "relative_strength": (-20, 20),
+        },
+        "rating_thresholds": {
+            "strong_hold": 75,
+            "hold": 60,
+            "neutral": 50,
+            "sell": 40,
+        },
+        "timeframes": {
+            "hourly": {
+                "interval": "1h",
+                "period": "730d",
+                "ma_short": 50,
+                "ma_long": 200,
+                "rsi_period": 14,
+                "vol_recent_bars": 7,
+                "vol_baseline_bars": 130,
+                "mom_windows": {"1D%": 7, "1W%": 33, "1M%": 140},
+                "bench_bars": 33,
+                "min_expected_bars": 1800,
+                "bars_per_day": 7,
+            },
+        },
+        "score_weights": {
+            "trend": 20,
+            "momentum": 10,
+            "price_momentum": 15,
+            "volume": 20,
+            "relative_strength": 20,
+            "risk_adjustment": 15,
+        },
+        "category_overrides": {
+            "BBLU": "equity_us",
+            "BCPL": "bond",
+            "CEFZ": "equity_us",
+            "CLSE": "equity_us",
+            "DBAW": "equity_intl",
+            "DXJ": "equity_intl",
+            "EWT": "equity_em",
+            "FAD": "equity_us",
+            "FLTR": "bond",
+            "GCSH": "bond",
+            "GRID": "equity_us",
+            "HAWX": "equity_intl",
+            "HTUS": "equity_us",
+            "HYGH": "bond",
+            "HYHG": "bond",
+        },
+        "leveraged_overrides": {"HTUS"},
+        "ultra_short_bond_overrides": {"GCSH"},
+        "ultra_short_risk_range": {"vol": (0.3, 4), "dd": (0, 3)},
+        "benchmarks_by_category": {
+            "equity_us": {"SPY": "SPY", "DJI": "^DJI", "SPX": "^GSPC", "IXIC": "^IXIC"},
+            "equity_intl": {"EFA": "EFA", "VXUS": "VXUS"},
+            "equity_em": {"EEM": "EEM"},
+            "bond": {"AGG": "AGG", "BND": "BND"},
+            "commodity": {"DBC": "DBC", "GLD": "GLD"},
+            "real_estate": {"VNQ": "VNQ"},
+        },
+        "default_category": "equity_us",
+        "risk_ranges_by_category": {
+            "equity_us": {"vol": (8, 35), "dd": (0, 30)},
+            "equity_intl": {"vol": (8, 35), "dd": (0, 30)},
+            "equity_em": {"vol": (10, 45), "dd": (0, 40)},
+            "bond": {"vol": (2, 15), "dd": (0, 15)},
+            "commodity": {"vol": (10, 45), "dd": (0, 40)},
+            "real_estate": {"vol": (8, 35), "dd": (0, 30)},
+        },
+        "leveraged_risk_range": {"vol": (15, 80), "dd": (0, 60)},
+        "leveraged_substring_keywords": ["2x", "3x", "-1x", "ultrapro"],
+        "leveraged_word_keywords": ["ultra", "leveraged", "inverse", "bull", "bear"],
+    },
+    "output": {
+        "scanner_csv": "etf_scanner.csv",
+        "csv_include_index": False,
+        "display_width": 220,
+        "display_max_columns": None,
+    },
+}
+
+WEBULL_CONFIG = CONFIG["webull"]
+FTP_CONFIG = CONFIG["ftp"]
+RATING_CONFIG = CONFIG["ratings"]
+PROGRESS_CONFIG = CONFIG["progress"]
+SCREEN_CONFIG = CONFIG["screen"]
+OUTPUT_CONFIG = CONFIG["output"]
+
+SANDBOX_APP_KEY = WEBULL_CONFIG["sandbox_app_key"]
+SANDBOX_APP_SECRET = WEBULL_CONFIG["sandbox_app_secret"]
+SANDBOX_HOST = WEBULL_CONFIG["sandbox_host"]
+ACCOUNT_APP_KEY = WEBULL_CONFIG["account_app_key"]
+ACCOUNT_APP_SECRET = WEBULL_CONFIG["account_app_secret"]
+SANDBOX_BASE_URL = f"https://{SANDBOX_HOST}"
+
+
+def load_access_token():
+    token = os.getenv(WEBULL_CONFIG["token_environment_variable"], "").strip()
+    if token:
+        return token
+
+    token_file = Path(__file__).resolve().parent / WEBULL_CONFIG["token_file"]
+    try:
+        with token_file.open(encoding="utf-8") as file:
+            return next((line.strip() for line in file if line.strip()), "")
+    except OSError:
+        return ""
+
+
+ACCESS_TOKEN = load_access_token()
 
 
 def generate_signature(path, query_params, body_string, app_key, app_secret, host, timestamp, nonce):
     signing_headers = {
         "x-app-key": app_key,
         "x-timestamp": timestamp,
-        "x-signature-algorithm": "HMAC-SHA1",
-        "x-signature-version": "1.0",
+        "x-signature-algorithm": WEBULL_CONFIG["signature_algorithm"],
+        "x-signature-version": WEBULL_CONFIG["signature_version"],
         "x-signature-nonce": nonce,
         "host": host,
     }
@@ -59,7 +242,17 @@ def generate_signature(path, query_params, body_string, app_key, app_secret, hos
     return signature
 
 
-def call_api(method, path, query_params=None, body=None, access_token=None):
+def call_api(
+    method,
+    path,
+    query_params=None,
+    body=None,
+    access_token=None,
+    app_key=SANDBOX_APP_KEY,
+    app_secret=SANDBOX_APP_SECRET,
+    host=SANDBOX_HOST,
+    base_url=SANDBOX_BASE_URL,
+):
     query_params = query_params or {}
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     nonce = uuid.uuid4().hex
@@ -68,27 +261,28 @@ def call_api(method, path, query_params=None, body=None, access_token=None):
 
     signature = generate_signature(
         path, query_params, body_string,
-        APP_KEY, APP_SECRET, HOST, timestamp, nonce,
+        app_key, app_secret, host, timestamp, nonce,
     )
 
     headers = {
         "Accept": "application/json",
-        "x-app-key": APP_KEY,
+        "x-app-key": app_key,
         "x-timestamp": timestamp,
         "x-signature": signature,
-        "x-signature-algorithm": "HMAC-SHA1",
-        "x-signature-version": "1.0",
+        "x-signature-algorithm": WEBULL_CONFIG["signature_algorithm"],
+        "x-signature-version": WEBULL_CONFIG["signature_version"],
         "x-signature-nonce": nonce,
-        "x-version": "v2",
+        "x-version": WEBULL_CONFIG["api_version"],
     }
     if access_token is not None:
         if not access_token:
             raise ValueError(
-                "WEBULL_ACCESS_TOKEN is not set. Set it in the environment and rerun this cell."
+                f"{WEBULL_CONFIG['token_environment_variable']} is not set. "
+                "Set it in the environment or configure the token file."
             )
         headers["x-access-token"] = access_token
 
-    url = f"{BASE_URL}{path}"
+    url = f"{base_url}{path}"
 
     if method.upper() == "GET":
         resp = requests.get(url, headers=headers, params=query_params)
@@ -98,46 +292,23 @@ def call_api(method, path, query_params=None, body=None, access_token=None):
 
     return resp
 
-# --- Create access token ---
-token_response = call_api("POST", "/auth/tokens/create")
-print(f"Status: {token_response.status_code}")
-
-try:
-    token_data = token_response.json()
-except ValueError:
-    token_data = None
-
-if token_response.ok and isinstance(token_data, dict):
-    ACCESS_TOKEN = (
-        token_data.get("access_token")
-        or token_data.get("accessToken")
-        or token_data.get("token")
-    )
-    if not ACCESS_TOKEN:
-        raise KeyError(f"Token field not found in response: {token_data}")
-    print("Access token created successfully.")
-else:
-    print(token_response.text)
-
-
 def fetch_ftp_file(filename):
-    ftp = ftplib.FTP("ftp.nasdaqtrader.com")
+    ftp = ftplib.FTP(FTP_CONFIG["host"])
     ftp.login()
-    ftp.cwd("symboldirectory")
+    ftp.cwd(FTP_CONFIG["directory"])
     buf = io.BytesIO()
     ftp.retrbinary(f"RETR {filename}", buf.write)
     ftp.quit()
     return buf.getvalue().decode("utf-8")
 
-# 抓两个档案
-nasdaq_text = fetch_ftp_file("nasdaqlisted.txt")
-other_text = fetch_ftp_file("otherlisted.txt")
+# Download both Nasdaq symbol-directory files. Each file ends with a metadata
+# footer, so the final row is removed before the tables are combined.
+nasdaq_text = fetch_ftp_file(FTP_CONFIG["listed_file"])
+other_text = fetch_ftp_file(FTP_CONFIG["other_listed_file"])
+nasdaq = pd.read_csv(io.StringIO(nasdaq_text), sep=FTP_CONFIG["delimiter"])[:-1]
+other = pd.read_csv(io.StringIO(other_text), sep=FTP_CONFIG["delimiter"])[:-1]
 
-# 转成 DataFrame(最后一行是档案时间戳footer,要去掉)
-nasdaq = pd.read_csv(io.StringIO(nasdaq_text), sep="|")[:-1]
-other = pd.read_csv(io.StringIO(other_text), sep="|")[:-1]
-
-# 筛选 ETF
+# Keep only ETFs and normalize the different symbol-column names.
 nasdaq_etfs = nasdaq[nasdaq["ETF"] == "Y"][["Symbol", "Security Name"]]
 other_etfs = other[other["ETF"] == "Y"][["ACT Symbol", "Security Name"]].rename(
     columns={"ACT Symbol": "Symbol"}
@@ -154,7 +325,8 @@ print(f"Total US ETFs found: {len(all_etfs)}")
 with pd.option_context('display.max_rows', 10, 'display.max_columns', None):
     print(all_etfs)
 
-api_client = ApiClient(APP_KEY, APP_SECRET, Region.HK.value)
+# The account client uses production credentials only to read current holdings.
+api_client = ApiClient(ACCOUNT_APP_KEY, ACCOUNT_APP_SECRET, WEBULL_CONFIG["region"])
 api = API(api_client)
 
 res_acct = api.account.get_app_subscriptions()
@@ -163,7 +335,9 @@ account_id = None
 result = res_acct.json()
 account_id = result[0]['account_id']
 
-res_stock = api.account.get_account_position(account_id,page_size=100)
+res_stock = api.account.get_account_position(
+    account_id, page_size=WEBULL_CONFIG["account_page_size"]
+)
 account_position = res_stock.json()
 
 holdings = account_position.get("holdings", [])
@@ -184,7 +358,7 @@ for ticker in tqdm(holdings, desc="Fetching ticker data", unit="ticker"):
         results.append({'Ticker': ticker, 'Type': quote_type, 'Name': long_name})
     except Exception as e:
         results.append({'Ticker': ticker, 'Type': 'ERROR', 'Name': str(e)})
-    time.sleep(0.3)
+    time.sleep(SCREEN_CONFIG["holdings_metadata_delay_seconds"])
 
 df = pd.DataFrame(results)
 
@@ -210,18 +384,39 @@ etf_symbols = list(dict.fromkeys(list(etf_symbols) + current_etf_holdings))
 
 fund_rating_rows = []
 fund_rating_errors = []
-request_delay_seconds = 0.1
-retry_wait_seconds = 10
-max_retries = 5
+request_delay_seconds = RATING_CONFIG["request_delay_seconds"]
+retry_wait_seconds = RATING_CONFIG["retry_wait_seconds"]
+max_retries = RATING_CONFIG["max_retries"]
 total_symbols = len(etf_symbols)
 started_at = time.time()
+progress_update_interval_seconds = PROGRESS_CONFIG["update_interval_seconds"]
+last_progress_update_at = 0.0
+last_progress_key = None
+
+if not ACCESS_TOKEN:
+    raise RuntimeError(
+        f"No Webull access token found. Set "
+        f"{WEBULL_CONFIG['token_environment_variable']} or add the token as "
+        f"the first non-empty line of {WEBULL_CONFIG['token_file']}."
+    )
 
 
 def show_progress(completed, current_symbol, state="requesting"):
+    global last_progress_update_at, last_progress_key
+
+    now = time.time()
+    progress_key = (completed, current_symbol, state, len(fund_rating_rows), len(fund_rating_errors))
+    is_state_change = progress_key != last_progress_key
+    if (
+        now - last_progress_update_at < progress_update_interval_seconds
+        and not is_state_change
+    ):
+        return
+
     elapsed = time.time() - started_at
     rate = completed / elapsed if elapsed > 0 and completed else 0
     remaining = (total_symbols - completed) / rate if rate > 0 else 0
-    bar_length = 30
+    bar_length = PROGRESS_CONFIG["bar_length"]
     filled = int(bar_length * completed / total_symbols) if total_symbols else 0
     progress_bar = "#" * filled + "-" * (bar_length - filled)
     eta = f"ETA {remaining / 60:.1f} min" if rate else "ETA calculating"
@@ -229,11 +424,14 @@ def show_progress(completed, current_symbol, state="requesting"):
     message = (
         f"\r[{progress_bar}] {completed:>4}/{total_symbols} "
         f"({percentage:.1%}) | "
-        f"{current_symbol:<6} | Success {len(fund_rating_rows):>4} | "
+        f"{current_symbol:<6} | {state:<20} | Success {len(fund_rating_rows):>4} | "
         f"Failed {len(fund_rating_errors):>3}"
     )
-    sys.stdout.write(message[:160].ljust(160))
+    line_width = PROGRESS_CONFIG["line_width"]
+    sys.stdout.write(message[:line_width].ljust(line_width))
     sys.stdout.flush()
+    last_progress_update_at = now
+    last_progress_key = progress_key
 
 
 def wait_with_progress(seconds, completed, symbol, reason):
@@ -243,11 +441,38 @@ def wait_with_progress(seconds, completed, symbol, reason):
         show_progress(completed, symbol, f"{reason}, wait {seconds_left}s")
         if seconds_left == 0:
             break
-        time.sleep(min(0.1, seconds_left))
+        time.sleep(min(PROGRESS_CONFIG["poll_interval_seconds"], seconds_left))
 
 
 print(f"Starting ETF fund ratings download for {total_symbols} symbols at {datetime.now():%H:%M:%S}")
 show_progress(0, "-", "starting")
+
+def get_rating_error_message(response):
+    try:
+        payload = response.json()
+    except ValueError:
+        return response.text.strip()
+
+    if isinstance(payload, dict):
+        return str(
+            payload.get("message")
+            or payload.get("error")
+            or payload.get("msg")
+            or response.text
+        ).strip()
+    return response.text.strip()
+
+
+def is_rating_not_found(response, error_message):
+    if response.status_code in RATING_CONFIG["not_found_status_codes"]:
+        return True
+
+    normalized_message = error_message.lower()
+    return any(
+        marker in normalized_message
+        for marker in RATING_CONFIG["not_found_markers"]
+    )
+
 
 for completed, symbol in enumerate(etf_symbols, start=1):
     show_progress(completed - 1, symbol, "requesting")
@@ -255,26 +480,30 @@ for completed, symbol in enumerate(etf_symbols, start=1):
         try:
             rating_response = call_api(
                 "GET",
-                "/market-data/fundamentals/fund-ratings/get",
-                query_params={"symbol": symbol, "category": "US_STOCK"},
+                WEBULL_CONFIG["ratings_endpoint"],
+                query_params={
+                    "symbol": symbol,
+                    "category": WEBULL_CONFIG["ratings_category"],
+                },
                 access_token=ACCESS_TOKEN,
             )
 
-            if rating_response.status_code == 417:
-                try:
-                    error_payload = rating_response.json()
-                    error_message = error_payload.get("message", rating_response.text)
-                except ValueError:
-                    error_message = rating_response.text
+            error_message = get_rating_error_message(rating_response)
+            if (
+                rating_response.status_code != RATING_CONFIG["rate_limit_status_code"]
+                and is_rating_not_found(
+                    rating_response, error_message
+                )
+            ):
                 fund_rating_errors.append(
                     {
                         "symbol": symbol,
-                        "error": f"Skipped: {error_message}",
+                        "error": f"Skipped: rating not found ({error_message})",
                     }
                 )
                 break
 
-            if rating_response.status_code == 429:
+            if rating_response.status_code == RATING_CONFIG["rate_limit_status_code"]:
                 if attempt == max_retries:
                     raise requests.HTTPError("Rate limit remained active after retries")
 
@@ -294,6 +523,11 @@ for completed, symbol in enumerate(etf_symbols, start=1):
             ratings = rating_response.json()
             if not isinstance(ratings, list):
                 raise TypeError("Expected fund ratings response to be a list")
+            if not ratings:
+                fund_rating_errors.append(
+                    {"symbol": symbol, "error": "Skipped: no rating data returned"}
+                )
+                break
 
             for rating in ratings:
                 if not isinstance(rating, dict):
@@ -312,7 +546,15 @@ for completed, symbol in enumerate(etf_symbols, start=1):
             if attempt == max_retries:
                 fund_rating_errors.append({"symbol": symbol, "error": str(error)})
                 break
-            wait_with_progress(min(60, 2 ** attempt * 2), completed - 1, symbol, "retrying")
+            wait_with_progress(
+                min(
+                    RATING_CONFIG["retry_backoff_max_seconds"],
+                    2 ** attempt * RATING_CONFIG["retry_backoff_base_seconds"],
+                ),
+                completed - 1,
+                symbol,
+                "retrying",
+            )
 
     wait_with_progress(request_delay_seconds, completed, symbol, "throttling")
     show_progress(completed, symbol, "completed")
@@ -340,7 +582,9 @@ if fund_rating_errors:
 
 print(etf_ratings_df)
 
-# --- Summarize weighted rating for every ETF symbol ---
+# Convert the raw agency/cycle rows into one weighted rating per ETF. The
+# summary uses only recent observations and gives longer rating cycles more
+# weight according to the top-level configuration.
 ratings_for_summary = etf_ratings_df.copy()
 ratings_for_summary["rating_cycle"] = pd.to_numeric(
     ratings_for_summary["rating_cycle"], errors="coerce"
@@ -352,9 +596,11 @@ ratings_for_summary["rating_date"] = pd.to_datetime(
     ratings_for_summary["rating_date"], errors="coerce"
 )
 
-# Keep only ratings from the trailing 1 year of data (relative to the
-# most recent rating_date present, not necessarily "today").
-cutoff_date = ratings_for_summary["rating_date"].max() - pd.DateOffset(years=1)
+# Keep ratings from the configured trailing window, measured from the newest
+# date returned by the API rather than from the local machine's current date.
+cutoff_date = ratings_for_summary["rating_date"].max() - pd.DateOffset(
+    years=RATING_CONFIG["lookback_years"]
+)
 ratings_for_summary = ratings_for_summary[
     ratings_for_summary["rating_date"] >= cutoff_date
 ]
@@ -366,7 +612,7 @@ cycle_ratings = (
     .mean()
 )
 
-cycle_weights = {3: 1.0, 5: 1.5, 10: 2.0}
+cycle_weights = RATING_CONFIG["cycle_weights"]
 
 def calculate_weighted_rating(symbol_ratings):
     applicable = symbol_ratings[
@@ -405,7 +651,7 @@ etf_weighted_ratings_df = (
 
 etf_weighted_ratings_df["weighted_rating"] = pd.to_numeric(
     etf_weighted_ratings_df["weighted_rating"], errors="coerce"
-).round(1)
+).round(RATING_CONFIG["rating_decimal_places"])
 
 # Most recent rating_date (within the 1-year window) contributing to each symbol.
 latest_rating_date = (
@@ -429,7 +675,9 @@ sorted_df = etf_weighted_ratings_df.sort_values(
     ascending=[False, False]
 ).reset_index(drop=True)
 
-filtered_df = sorted_df[sorted_df['weighted_rating'] >= 4.0]
+filtered_df = sorted_df[
+    sorted_df["weighted_rating"] >= RATING_CONFIG["minimum_weighted_rating"]
+]
 filtered_df = filtered_df[["symbol", "rating_date", "weighted_rating", "rating_cycles"]]
 
 print(filtered_df)
@@ -437,11 +685,9 @@ print(filtered_df)
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 # ----------------------------------------------------------------------------
-# 0. INPUT DATA
+# Build the technical-screen input from the weighted fund ratings above.
+# Each row contains a symbol, its latest rating date, and its blended rating.
 # ----------------------------------------------------------------------------
-# filtered_df must exist before this point (symbol / rating_date /
-# weighted_rating / rating_cycles columns), e.g. loaded from a prior step:
-#   filtered_df = pd.read_csv("your_ratings_input.csv")
 if "filtered_df" not in globals():
     raise RuntimeError(
         "filtered_df is not defined. Load your ratings DataFrame "
@@ -449,9 +695,7 @@ if "filtered_df" not in globals():
         "before running this script."
     )
 
-# FIX (#minor-dupes): guard against duplicate symbols silently clobbering each
-# other in the rating lookup (to_dict('index') keeps only the last row for a
-# repeated key with no warning). Keep the last occurrence explicitly and warn.
+# Keep the last duplicate symbol explicitly so the rating lookup is predictable.
 _dupe_mask = filtered_df["symbol"].duplicated(keep=False)
 if _dupe_mask.any():
     _dupes = sorted(filtered_df.loc[_dupe_mask, "symbol"].unique().tolist())
@@ -462,19 +706,18 @@ if _dupe_mask.any():
     filtered_df = filtered_df.drop_duplicates(subset="symbol", keep="last").reset_index(drop=True)
 
 # ----------------------------------------------------------------------------
-# 1. CONFIG
+# Runtime inputs derived from the downloaded ratings.
+# User-editable values belong in CONFIG at the top of this file.
 # ----------------------------------------------------------------------------
 TICKERS = filtered_df["symbol"].tolist()
 RATING_SCORES = filtered_df.set_index("symbol")[
     ["rating_date", "weighted_rating", "rating_cycles"]
 ].to_dict("index")
 
-# weighted_rating is on a ~1-5 star-style scale; rescale to 0-100 so it's on
-# the same footing as technical_score before blending.
-RATING_SCALE_MAX = 5
+# Ratings use a 0-to-5 scale and are converted to 0-to-100 before blending.
+RATING_SCALE_MAX = RATING_CONFIG["rating_scale_max"]
 
-# FIX (#5 orig): fail loudly if weighted_rating isn't actually on the assumed
-# 0-5 scale, instead of silently producing compressed/out-of-range scores.
+# Reject invalid input instead of silently compressing an out-of-range score.
 _rating_vals = filtered_df["weighted_rating"].dropna()
 if not _rating_vals.empty:
     _bad_ratings = _rating_vals[(_rating_vals < 0) | (_rating_vals > RATING_SCALE_MAX)]
@@ -490,133 +733,40 @@ def rating_to_100(r):
     return (r / RATING_SCALE_MAX) * 100 if pd.notna(r) else np.nan
 
 
-# How much weight the backward-looking fund rating gets vs. the forward-looking
-# technical read. Set explicitly rather than inherited from the single-stock
-# screen, since a Morningstar-style rating and a sell-side analyst rating are
-# different kinds of signal.
-RATING_WEIGHT = 0.2
-TECHNICAL_WEIGHT = 1 - RATING_WEIGHT
+# Blend the fund rating with the technical score using the top-level settings.
+RATING_WEIGHT = SCREEN_CONFIG["rating_weight"]
+TECHNICAL_WEIGHT = SCREEN_CONFIG["technical_weight"]
 
-# Pre-classified based on each fund's actual strategy/prospectus. Also means
-# classify_etf() skips its live yf.Ticker(ticker).info lookup for these
-# tickers entirely.
-CATEGORY_OVERRIDES = {
-    "BBLU": "equity_us",   # EA Bridgeway Blue Chip ETF -- active US large-cap blend
-    "BCPL": "bond",        # BNY Mellon Core Plus ETF -- core-plus fixed income
-    "CEFZ": "equity_us",   # RiverNorth Active Income ETF -- actually multi-asset
-                            # (equities + bonds via closed-end funds); no bucket
-                            # here fits cleanly, worth a manual look later
-    "CLSE": "equity_us",   # Convergence Long/Short Equity ETF -- benchmarked to
-                            # Russell 3000, but net exposure floats 50-100%, so
-                            # it will structurally lag/lead SPY even when it's
-                            # doing exactly what it's designed to do
-    "DBAW": "equity_intl", # Xtrackers MSCI All World ex USA Hedged Equity ETF
-    "DXJ": "equity_intl",  # WisdomTree Japan Hedged Equity Fund
-    "EWT": "equity_em",    # iShares MSCI Taiwan ETF (Taiwan sits in MSCI EM)
-    "FAD": "equity_us",    # First Trust Multi Cap Growth AlphaDEX Fund
-    "FLTR": "bond",        # VanEck IG Floating Rate ETF
-    "GCSH": "bond",        # Guggenheim Ultra Short Income ETF -- near-cash,
-                            # gets its own tighter risk range below
-    "GRID": "equity_us",   # First Trust Clean Edge Smart Grid Infrastructure Fund
-    "HAWX": "equity_intl", # iShares Currency Hedged MSCI ACWI ex U.S. ETF
-    "HTUS": "equity_us",   # Hull Tactical US ETF -- tactical model can go long,
-                            # short, or leveraged on the S&P 500; see below
-    "HYGH": "bond",        # iShares Interest Rate Hedged High Yield Bond ETF
-    "HYHG": "bond",        # ProShares High Yield-Interest Rate Hedged ETF
-}
+_screen = SCREEN_CONFIG
+CATEGORY_OVERRIDES = _screen["category_overrides"]
+LEVERAGED_OVERRIDES = _screen["leveraged_overrides"]
+ULTRA_SHORT_BOND_OVERRIDES = _screen["ultra_short_bond_overrides"]
+ULTRA_SHORT_RISK_RANGE = _screen["ultra_short_risk_range"]
+BENCHMARKS_BY_CATEGORY = _screen["benchmarks_by_category"]
+DEFAULT_CATEGORY = _screen["default_category"]
 
-LEVERAGED_OVERRIDES = {
-    "HTUS",  # can run leveraged/inverse S&P 500 exposure via its own model --
-             # won't get caught by LEVERAGED_NAME_KEYWORDS since "leveraged"
-             # isn't in the fund's actual name
-}
-
-# Ultra-short/cash-alternative bond funds barely move -- the standard bond
-# range (2-15% vol / 0-15% DD) is too wide to tell them apart from each other.
-ULTRA_SHORT_BOND_OVERRIDES = {"GCSH"}
-ULTRA_SHORT_RISK_RANGE = {"vol": (0.3, 4), "dd": (0, 3)}
-
-BENCHMARKS_BY_CATEGORY = {
-    "equity_us":   {"SPY": "SPY", "DJI": "^DJI", "SPX": "^GSPC", "IXIC": "^IXIC"},
-    "equity_intl": {"EFA": "EFA", "VXUS": "VXUS"},
-    "equity_em":   {"EEM": "EEM"},
-    "bond":        {"AGG": "AGG", "BND": "BND"},
-    "commodity":   {"DBC": "DBC", "GLD": "GLD"},
-    "real_estate": {"VNQ": "VNQ"},
-}
-DEFAULT_CATEGORY = "equity_us"
-
-TIMEFRAME = "hourly"
-REQUEST_DELAY_SEC = 1.5
-MAX_RETRIES = 3
-RETRY_BACKOFF_SEC = 5
-
-TIMEFRAME_CONFIG = {
-    "hourly": {
-        "interval": "1h",
-        "period": "730d",
-        "ma_short": 50,
-        "ma_long": 200,
-        "rsi_period": 14,
-        "vol_recent_bars": 7,
-        "vol_baseline_bars": 130,
-        "mom_windows": {"1D%": 7, "1W%": 33, "1M%": 140},
-        "bench_bars": 33,
-        # FIX (#4 orig): rough expected bar count for a 730-day hourly pull, so
-        # we can flag tickers where Yahoo silently truncated the history
-        # instead of assuming the full window was actually returned.
-        "min_expected_bars": 1800,
-        # FIX (#1 new): how many bars make up one trading day at this
-        # interval. A regular US equity session is ~6.5 hours, so an hourly
-        # bar series has ~7 bars/day (6 full hours + 1 partial). Used to turn
-        # the liquidity check into a genuine daily-dollar-volume figure
-        # instead of an hourly one.
-        "bars_per_day": 7,
-    },
-}
-
-SCORE_WEIGHTS = {
-    "trend": 20,
-    "momentum": 10,
-    "price_momentum": 15,
-    "volume": 20,
-    "relative_strength": 20,
-    "risk_adjustment": 15,
-}
+TIMEFRAME = _screen["timeframe"]
+REQUEST_DELAY_SEC = _screen["request_delay_seconds"]
+MAX_RETRIES = _screen["max_retries"]
+RETRY_BACKOFF_SEC = _screen["retry_backoff_seconds"]
+TIMEFRAME_CONFIG = _screen["timeframes"]
+SCORE_WEIGHTS = _screen["score_weights"]
 assert sum(SCORE_WEIGHTS.values()) == 100
 
-# Risk clip ranges tuned down from the single-stock version -- diversified
-# ETFs sit at much lower vol/drawdown than individual names, so the original
-# 15-80% vol / 0-50% DD range barely discriminated between funds. Split by
-# category since bonds and equities have very different baseline vol.
-RISK_RANGE_BY_CATEGORY = {
-    "equity_us":   {"vol": (8, 35),  "dd": (0, 30)},
-    "equity_intl": {"vol": (8, 35),  "dd": (0, 30)},
-    "equity_em":   {"vol": (10, 45), "dd": (0, 40)},
-    "bond":        {"vol": (2, 15),  "dd": (0, 15)},
-    "commodity":   {"vol": (10, 45), "dd": (0, 40)},
-    "real_estate": {"vol": (8, 35),  "dd": (0, 30)},
-}
-LEVERAGED_RISK_RANGE = {"vol": (15, 80), "dd": (0, 60)}
+RISK_RANGE_BY_CATEGORY = _screen["risk_ranges_by_category"]
+LEVERAGED_RISK_RANGE = _screen["leveraged_risk_range"]
 
-# FIX (#4 orig / leverage keywords): the old list ("daily", "bull", "bear")
-# was prone to false positives on ordinary fund names/descriptions (e.g. a
-# "Daily Rebalanced" methodology blurb, or a marketing name containing "Bull
-# Market"). Split into unambiguous tokens (checked as plain substrings, since
-# "2x"/"3x"/"-1x" aren't real words) and phrase-like tokens that are now
-# matched as whole words via regex so "bull" doesn't fire on "bullish
-# outlook" copy and "daily" doesn't fire on ordinary boilerplate.
-LEVERAGED_SUBSTRING_KEYWORDS = ["2x", "3x", "-1x", "ultrapro"]
-LEVERAGED_WORD_KEYWORDS = ["ultra", "leveraged", "inverse", "bull", "bear"]
+LEVERAGED_SUBSTRING_KEYWORDS = _screen["leveraged_substring_keywords"]
+LEVERAGED_WORD_KEYWORDS = _screen["leveraged_word_keywords"]
 
-# Liquidity guardrail: flag (and optionally exclude) ETFs too thin to trust
-# the technical read. This threshold is a DAILY dollar-volume figure.
-MIN_AVG_DOLLAR_VOLUME = 1_000_000
-EXCLUDE_LOW_LIQUIDITY = False
+# Flag ETFs below the configured daily dollar-volume threshold. They are only
+# excluded when `exclude_low_liquidity` is enabled in the top configuration.
+MIN_AVG_DOLLAR_VOLUME = _screen["minimum_average_dollar_volume"]
+EXCLUDE_LOW_LIQUIDITY = _screen["exclude_low_liquidity"]
 
 
 # ----------------------------------------------------------------------------
-# 2. INDICATOR HELPERS
+# Indicator helpers
 # ----------------------------------------------------------------------------
 def rsi(series, period):
     delta = series.diff()
@@ -628,7 +778,12 @@ def rsi(series, period):
     return 100 - (100 / (1 + rs))
 
 
-def macd(series, fast=12, slow=26, signal=9):
+def macd(
+    series,
+    fast=SCREEN_CONFIG["macd"]["fast"],
+    slow=SCREEN_CONFIG["macd"]["slow"],
+    signal=SCREEN_CONFIG["macd"]["signal"],
+):
     ema_fast = series.ewm(span=fast, adjust=False).mean()
     ema_slow = series.ewm(span=slow, adjust=False).mean()
     macd_line = ema_fast - ema_slow
@@ -662,19 +817,16 @@ def inverse_clip_scale(value, lo, hi, out_max):
     return (hi - v) / (hi - lo) * out_max
 
 
-def avg_daily_dollar_volume(close, volume, bars_per_day, lookback_days=30):
-    """FIX (#1 new): true daily-equivalent average dollar volume.
+def avg_daily_dollar_volume(
+    close,
+    volume,
+    bars_per_day,
+    lookback_days=SCREEN_CONFIG["liquidity_lookback_days"],
+):
+    """Estimate average daily dollar volume from intraday bars.
 
-    The old version did `(close * volume).tail(30).mean()`, which -- on an
-    hourly bar series -- averages the last 30 *hourly* bars (~4.6 trading
-    days), not 30 days. That number was then compared against
-    MIN_AVG_DOLLAR_VOLUME, a threshold sized for a daily figure, so it
-    understated liquidity by roughly bars_per_day-fold and over-flagged
-    perfectly liquid ETFs as LowLiquidity.
-
-    This groups bars into day-sized chunks, sums dollar volume within each
-    chunk (so each element is a real day's total dollar volume), then
-    averages across the trailing `lookback_days` such days.
+    Dollar volume is summed into day-sized groups before averaging, so the
+    result can be compared with the daily liquidity threshold in CONFIG.
     """
     if bars_per_day <= 0:
         return np.nan
@@ -691,7 +843,7 @@ def avg_daily_dollar_volume(close, volume, bars_per_day, lookback_days=30):
 
 
 # ----------------------------------------------------------------------------
-# 3. ROBUST DOWNLOAD
+# Yahoo download helpers with retry handling
 # ----------------------------------------------------------------------------
 def safe_download(ticker, interval, period):
     last_err = None
@@ -700,7 +852,7 @@ def safe_download(ticker, interval, period):
             hist = yf.Ticker(ticker).history(
                 period=period,
                 interval=interval,
-                auto_adjust=True,
+                auto_adjust=SCREEN_CONFIG["auto_adjust_prices"],
             )
             if not hist.empty and "Close" in hist.columns:
                 return hist
@@ -713,14 +865,7 @@ def safe_download(ticker, interval, period):
 
 
 def safe_get_info(ticker):
-    """FIX (#2 new): the old classify_etf() called yf.Ticker(ticker).info
-    directly -- no retry, no backoff, no delay -- for every ticker not in
-    CATEGORY_OVERRIDES. On a large watchlist that's a second, unthrottled
-    hammer on Yahoo's API sitting right next to safe_download(), which
-    already has retry/backoff/delay. This mirrors that same pattern for
-    the .info lookup so classification is no more likely to trip a rate
-    limit than the price/volume download is.
-    """
+    """Fetch Yahoo metadata with the same retry policy as price history."""
     last_err = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -736,7 +881,7 @@ def safe_get_info(ticker):
 
 
 # ----------------------------------------------------------------------------
-# 4. ETF CATEGORY / LEVERAGE DETECTION
+# ETF category and leverage classification
 # ----------------------------------------------------------------------------
 _category_cache = {}
 
@@ -744,10 +889,8 @@ _category_cache = {}
 def _is_leveraged(text):
     if any(w in text for w in LEVERAGED_SUBSTRING_KEYWORDS):
         return True
-    # FIX (#4 orig): word-boundary match so "bull"/"bear"/"ultra"/etc. don't
-    # fire on substrings inside ordinary words or marketing copy (e.g. a fund
-    # description that happens to contain "bullish"). \b requires a real word
-    # boundary on both sides.
+    # Word boundaries prevent terms such as "bull" from matching "bullish" in
+    # unrelated marketing text.
     import re
     return any(re.search(rf"\b{w}\b", text) for w in LEVERAGED_WORD_KEYWORDS)
 
@@ -797,20 +940,17 @@ def classify_etf(ticker):
 
 
 # ----------------------------------------------------------------------------
-# 5. PREP: CLASSIFY ALL TICKERS UP FRONT
+# Classify all selected ETFs before downloading price history
 # ----------------------------------------------------------------------------
 def prepare_etf_categories():
-    """Classifies every ticker and writes a snapshot of the input ratings to
-    etf_weighted_ratings.csv as a side effect (kept from the original for
-    traceability -- flagged here in the docstring since the function name
-    alone doesn't hint that it does I/O)."""
+    """Return the categories needed for the benchmark download."""
     categories_needed = set()
     bar = tqdm(TICKERS, desc="Step 1/3: Classifying ETFs", unit="ticker")
     for t in bar:
         cat, _lev, used_live_lookup = classify_etf(t)
         categories_needed.add(cat)
-        # FIX (#2 new): only sleep when we actually made a live network call;
-        # override-based / cached lookups are free and shouldn't be throttled.
+        # Overrides and cached values do not make a Yahoo request, so only
+        # throttle after a live metadata lookup.
         if used_live_lookup:
             time.sleep(REQUEST_DELAY_SEC)
     categories_needed.add(DEFAULT_CATEGORY)
@@ -819,17 +959,17 @@ def prepare_etf_categories():
 
 
 # ----------------------------------------------------------------------------
-# 6. PER-TICKER ANALYSIS
+# Calculate indicators and scores for one ETF
 # ----------------------------------------------------------------------------
 def analyze_ticker(ticker, cfg, bench_rets_by_category, rating_scores):
     hist = safe_download(ticker, cfg["interval"], cfg["period"])
-    if hist.empty or len(hist) < max(cfg["ma_short"], 30):
+    if hist.empty or len(hist) < max(
+        cfg["ma_short"], SCREEN_CONFIG["minimum_history_bars"]
+    ):
         return None
 
-    # FIX (#4 orig): flag (don't drop) tickers where Yahoo returned meaningfully
-    # fewer bars than a full 730-day hourly pull should have -- MA200 and the
-    # 130-bar volume baseline get quietly thin otherwise, with no signal that
-    # it happened.
+    # Keep short Yahoo histories in the output, but flag them because long-term
+    # indicators may be based on less data than the configured history window.
     short_history = len(hist) < cfg.get("min_expected_bars", 0)
 
     category, is_leveraged, _used_live_lookup = classify_etf(ticker)
@@ -846,11 +986,14 @@ def analyze_ticker(ticker, cfg, bench_rets_by_category, rating_scores):
     volume = hist["Volume"]
     price = float(close.iloc[-1])
 
-    # FIX (#1 new): use the bars-per-day-aware daily dollar volume helper
-    # instead of averaging raw hourly-bar dollar volume against a
-    # daily-sized threshold.
+    # Convert intraday volume into a daily-equivalent liquidity measure.
     bars_per_day = cfg.get("bars_per_day", 1)
-    dollar_vol = avg_daily_dollar_volume(close, volume, bars_per_day, lookback_days=30)
+    dollar_vol = avg_daily_dollar_volume(
+        close,
+        volume,
+        bars_per_day,
+        lookback_days=SCREEN_CONFIG["liquidity_lookback_days"],
+    )
     low_liquidity = (not np.isnan(dollar_vol)) and dollar_vol < MIN_AVG_DOLLAR_VOLUME
     if low_liquidity and EXCLUDE_LOW_LIQUIDITY:
         return None
@@ -875,11 +1018,17 @@ def analyze_ticker(ticker, cfg, bench_rets_by_category, rating_scores):
     mom_returns = {label: pct_change_over(close, bars)
                    for label, bars in cfg["mom_windows"].items()}
 
-    # Renamed from `daily_ret` -- these are per-bar (hourly) returns, not
-    # daily returns; the annualization factor below already accounts for
-    # that (252 trading days * 6.5 bars/day).
+    # Returns are measured per downloaded bar and annualized using the
+    # trading-session assumptions configured at the top of the file.
     bar_ret = close.pct_change(fill_method=None).dropna()
-    ann_vol = float(bar_ret.std() * np.sqrt(252 * 6.5) * 100)
+    ann_vol = float(
+        bar_ret.std()
+        * np.sqrt(
+            SCREEN_CONFIG["annualized_trading_days"]
+            * SCREEN_CONFIG["annualized_bars_per_day"]
+        )
+        * 100
+    )
     dd = max_drawdown(close)
 
     primary_ret = pct_change_over(close, cfg["bench_bars"])
@@ -899,30 +1048,43 @@ def analyze_ticker(ticker, cfg, bench_rets_by_category, rating_scores):
     vs_short_pct = (price / ma_short - 1) * 100 if ma_short else np.nan
     vs_long_pct = (price / ma_long - 1) * 100 if not np.isnan(ma_long) else np.nan
 
-    score_short = clip_scale(vs_short_pct, -10, 10, SCORE_WEIGHTS["trend"] / 2)
-    score_long = (clip_scale(vs_long_pct, -10, 10, SCORE_WEIGHTS["trend"] / 2)
+    trend_range = SCREEN_CONFIG["score_ranges"]["trend"]
+    score_short = clip_scale(vs_short_pct, *trend_range, SCORE_WEIGHTS["trend"] / 2)
+    score_long = (clip_scale(vs_long_pct, *trend_range, SCORE_WEIGHTS["trend"] / 2)
                   if not np.isnan(vs_long_pct) else 0.0)
     trend_score = score_short + score_long
 
-    # FIX (#1 orig): r can be NaN (e.g. a flat/illiquid run producing 0/0 in
-    # the RSI calc). Route it through the same NaN-safe path as everything
-    # else instead of letting `max(nan, 0)` silently resolve to 0 -- which
-    # read as "strong sell" for what was actually "couldn't compute
-    # momentum."
+    # A missing RSI is treated as unavailable data, not as a bearish signal.
     if np.isnan(r):
         score_rsi = 0.0
     else:
-        score_rsi = SCORE_WEIGHTS["momentum"] / 2 * max(0, 1 - abs(r - 55) / 45)
+        rsi_config = SCREEN_CONFIG["rsi"]
+        score_rsi = SCORE_WEIGHTS["momentum"] / 2 * max(
+            0,
+            1 - abs(r - rsi_config["ideal"]) / rsi_config["distance"],
+        )
     score_macd = SCORE_WEIGHTS["momentum"] / 2 if macd_bullish else 0
     momentum_score = score_rsi + score_macd
 
-    volume_score = clip_scale(vol_ratio, 0.5, 2.5, SCORE_WEIGHTS["volume"])
+    volume_score = clip_scale(
+        vol_ratio,
+        *SCREEN_CONFIG["score_ranges"]["volume"],
+        SCORE_WEIGHTS["volume"],
+    )
 
     valid_mom = [v for v in mom_returns.values() if not np.isnan(v)]
     avg_mom = float(np.mean(valid_mom)) if valid_mom else np.nan
-    price_momentum_score = clip_scale(avg_mom, -40, 40, SCORE_WEIGHTS["price_momentum"])
+    price_momentum_score = clip_scale(
+        avg_mom,
+        *SCREEN_CONFIG["score_ranges"]["price_momentum"],
+        SCORE_WEIGHTS["price_momentum"],
+    )
 
-    rel_strength_score = clip_scale(rel_strength, -20, 20, SCORE_WEIGHTS["relative_strength"])
+    rel_strength_score = clip_scale(
+        rel_strength,
+        *SCREEN_CONFIG["score_ranges"]["relative_strength"],
+        SCORE_WEIGHTS["relative_strength"],
+    )
     risk_vol_score = inverse_clip_scale(ann_vol, *risk_range["vol"], SCORE_WEIGHTS["risk_adjustment"] / 2)
     risk_dd_score = inverse_clip_scale(abs(dd), *risk_range["dd"], SCORE_WEIGHTS["risk_adjustment"] / 2)
     risk_score = risk_vol_score + risk_dd_score
@@ -935,12 +1097,8 @@ def analyze_ticker(ticker, cfg, bench_rets_by_category, rating_scores):
     weighted_rating = rating_data.get("weighted_rating", np.nan)
     fund_rating_score = rating_to_100(weighted_rating)
 
-    # FIX (#3 new): unrated tickers get pure technical_score while rated ones
-    # get an 80/20 blend -- both land in 0-100, so nothing is "broken," but a
-    # rated fund with a mediocre rating can be pulled below an unrated fund
-    # with the same technical picture, and previously the only trace of that
-    # was the NoRating flag buried in a text column. Made explicit as its own
-    # column so it's visible/filterable without parsing Flags.
+    # Unrated ETFs keep their technical score. Rated ETFs use the configured
+    # blend, and score_basis makes the distinction visible in the CSV output.
     if pd.isna(fund_rating_score):
         final_score = round(float(technical_score), 2)
         score_basis = "technical_only"
@@ -948,13 +1106,14 @@ def analyze_ticker(ticker, cfg, bench_rets_by_category, rating_scores):
         final_score = round(fund_rating_score * RATING_WEIGHT + technical_score * TECHNICAL_WEIGHT, 2)
         score_basis = "blended"
 
-    if final_score >= 75:
+    rating_thresholds = SCREEN_CONFIG["rating_thresholds"]
+    if final_score >= rating_thresholds["strong_hold"]:
         rating = "Strong hold"
-    elif final_score >= 60:
+    elif final_score >= rating_thresholds["hold"]:
         rating = "Hold"
-    elif final_score >= 50:
+    elif final_score >= rating_thresholds["neutral"]:
         rating = "Neutral"
-    elif final_score >= 40:
+    elif final_score >= rating_thresholds["sell"]:
         rating = "Sell"
     else:
         rating = "Strong sell"
@@ -964,11 +1123,15 @@ def analyze_ticker(ticker, cfg, bench_rets_by_category, rating_scores):
         flags.append("Uptrend")
     elif not np.isnan(vs_long_pct) and price < ma_short < ma_long:
         flags.append("Downtrend")
-    if r >= 70:
+    rsi_thresholds = SCREEN_CONFIG["rsi"]
+    if r >= rsi_thresholds["overbought"]:
         flags.append("Overbought(RSI)")
-    elif r <= 30:
+    elif r <= rsi_thresholds["oversold"]:
         flags.append("Oversold(RSI)")
-    if not np.isnan(vol_ratio) and vol_ratio >= 1.5:
+    if (
+        not np.isnan(vol_ratio)
+        and vol_ratio >= SCREEN_CONFIG["volume_surge_threshold"]
+    ):
         flags.append("VolumeSurge")
     if macd_bullish:
         flags.append("MACD+")
@@ -1020,7 +1183,7 @@ def analyze_ticker(ticker, cfg, bench_rets_by_category, rating_scores):
 
 
 # ----------------------------------------------------------------------------
-# 7. RUN THE SCREEN
+# Run the benchmark download and ETF scoring pipeline
 # ----------------------------------------------------------------------------
 def run_etf_screen():
     cfg = TIMEFRAME_CONFIG[TIMEFRAME]
@@ -1064,14 +1227,17 @@ def run_etf_screen():
 
     df = pd.DataFrame(rows).sort_values("final_score", ascending=False).reset_index(drop=True)
 
-    pd.set_option("display.width", 220)
-    pd.set_option("display.max_columns", None)
+    pd.set_option("display.width", OUTPUT_CONFIG["display_width"])
+    pd.set_option("display.max_columns", OUTPUT_CONFIG["display_max_columns"])
 
-    df.to_csv("etf_scanner.csv", index=False)
+    df.to_csv(
+        OUTPUT_CONFIG["scanner_csv"],
+        index=OUTPUT_CONFIG["csv_include_index"],
+    )
     return df
 
 # ----------------------------------------------------------------------------
-# 8. Execution
+# Execute the screen and expose the resulting DataFrame
 # ----------------------------------------------------------------------------
 print(df)
 df = run_etf_screen()
