@@ -11,6 +11,8 @@ jobs:
     env:
       APP_KEY: ${{ secrets.WEBULL_APP_KEY }}
       APP_SECRET: ${{ secrets.WEBULL_APP_SECRET }}
+      SANDBOX_KEY: ${{ secrets.SANDBOX_APP_KEY }}
+      SANDBOX_SECRET: ${{ secrets.SANDBOX_APP_SECRET }}
       PYTHONUNBUFFERED: "1"  # This is the magic line
     steps:
       - name: Checkout code
