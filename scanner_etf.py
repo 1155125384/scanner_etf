@@ -32,16 +32,11 @@ from pathlib import Path
 # the final ETF screen.
 CONFIG = {
     "webull": {
-        "sandbox_app_key": "42bd186fb65ea76de309d69cf12f024e",
-        "sandbox_app_secret": "29feb64b59d6b1b6b2d2aa8cea8a1b8d",
+        "sandbox_app_key": os.getenv('SANDBOX_KEY'),
+        "sandbox_app_secret": os.getenv('SANDBOX_SECRET'),
         "sandbox_host": "api.sandbox.webull.hk",
-        "account_app_key": "63d0bd6afb98053ff2ef998f47c7106e",
-        "account_app_secret": "a2f11b87ef8d765c6e07f75e7583ca38",
-        # "sandbox_app_key": os.getenv('SANDBOX_KEY'),
-        # "sandbox_app_secret": os.getenv('SANDBOX_SECRET'),
-        # "sandbox_host": "api.sandbox.webull.hk",
-        # "account_app_key": os.getenv('APP_KEY'),
-        # "account_app_secret": os.getenv('APP_SECRET'),
+        "account_app_key": os.getenv('APP_KEY'),
+        "account_app_secret": os.getenv('APP_SECRET'),
         "token_host": "api.sandbox.webull.hk",
         "token_api_version": "v3",
         "region": Region.HK.value,
