@@ -212,6 +212,13 @@ def load_access_token():
 
 ACCESS_TOKEN = load_access_token()
 
+if not ACCESS_TOKEN:
+    raise RuntimeError(
+        f"No Webull access token found. Set the GitHub Actions secret "
+        f"WEBULL_ACCESS_TOKEN and map it to the environment, or add the "
+        f"token as the first non-empty line of {WEBULL_CONFIG['token_file']}."
+    )
+
 
 def generate_signature(path, query_params, body_string, app_key, app_secret, host, timestamp, nonce):
     signing_headers = {
@@ -392,14 +399,6 @@ started_at = time.time()
 progress_update_interval_seconds = PROGRESS_CONFIG["update_interval_seconds"]
 last_progress_update_at = 0.0
 last_progress_key = None
-
-if not ACCESS_TOKEN:
-    raise RuntimeError(
-        f"No Webull access token found. Set "
-        f"{WEBULL_CONFIG['token_environment_variable']} or add the token as "
-        f"the first non-empty line of {WEBULL_CONFIG['token_file']}."
-    )
-
 
 def show_progress(completed, current_symbol, state="requesting"):
     global last_progress_update_at, last_progress_key
