@@ -1,7 +1,7 @@
 name: Hourly ETF Update
 on:
   schedule:
-    - cron: '0 * * * *'
+    - cron: '* * * * *'
   workflow_dispatch:
 
 concurrency:
