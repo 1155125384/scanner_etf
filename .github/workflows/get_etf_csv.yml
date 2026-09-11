@@ -2,18 +2,23 @@ name: Hourly ETF Update
 on:
   schedule:
     - cron: '0 * * * *'
-  workflow_dispatch:   # Allows you to run it manually to test
+  workflow_dispatch:
+
+concurrency:
+  group: etf-scanner-update
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # Crucial for saving the CSV back to your repo
+      contents: write
     env:
       APP_KEY: ${{ secrets.WEBULL_APP_KEY }}
       APP_SECRET: ${{ secrets.WEBULL_APP_SECRET }}
       SANDBOX_KEY: ${{ secrets.SANDBOX_APP_KEY }}
       SANDBOX_SECRET: ${{ secrets.SANDBOX_APP_SECRET }}
-      PYTHONUNBUFFERED: "1"  # This is the magic line
+      PYTHONUNBUFFERED: "1"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -34,6 +39,9 @@ jobs:
 
           for i in $(seq 1 10); do
             echo "=== Run $i of 10 ==="
+            git fetch origin main
+            git reset --hard origin/main
+
             python scanner_etf.py
 
             git add etf_scanner.csv
@@ -41,7 +49,6 @@ jobs:
               echo "No changes to commit on run $i"
             else
               git commit -m "Auto-update ETF list: $(date) (run $i/10)"
-              git pull --rebase origin main
-              git push
+              git push origin HEAD:main || { git fetch origin main && git reset --soft origin/main && git commit -m "Auto-update ETF list: $(date) (run $i/10)" && git push origin HEAD:main; }
             fi
           done
